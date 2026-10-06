@@ -1,0 +1,13 @@
+# Reference config — actual deploy is pasted via the Cloudflare dashboard
+# (CF API returns 401 from this VM; see README).
+name = "postdesk"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+[[kv_namespaces]]
+binding = "POSTDESK_KV"
+id = "REPLACE_WITH_DASHBOARD_KV_ID"
+
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "postdesk-media"
