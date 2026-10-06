@@ -134,7 +134,7 @@ async function handleMediaUpload(req, env) {
   if (!key || !file || typeof file.arrayBuffer !== 'function') {
     return json({ error: 'need key + file' }, 400);
   }
-  if (!/^[a-z0-9_]+\/[A-Za-z0-9._-]+$/.test(key)) return json({ error: 'bad key' }, 400);
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_./-]*$/.test(key) || key.includes('..')) return json({ error: 'bad key' }, 400);
   const buf = await file.arrayBuffer();
   if (buf.byteLength > 100 * 1024 * 1024) return json({ error: 'file too big' }, 413);
   const ct = file.type || 'application/octet-stream';
