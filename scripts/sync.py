@@ -66,6 +66,24 @@ def upload_media(base, secret, key, local_path):
     raise last
 
 
+def curl_json(base, secret, method, path, data):
+    """JSON API via curl (urllib gets 403'd by the egress proxy)."""
+    import subprocess
+    p = subprocess.run(
+        ["curl", "-s", "-w", "\n%{http_code}", "--max-time", "300",
+         "-X", method, base + path,
+         "-H", "x-sync-secret: " + secret,
+         "-H", "content-type: application/json",
+         "--data", json.dumps(data)],
+        capture_output=True, text=True)
+    out = p.stdout.strip().rsplit("\n", 1)
+    code = out[-1] if out else ""
+    body = out[0] if len(out) > 1 else ""
+    if code != "200":
+        raise RuntimeError("%s %s -> HTTP %s: %s" % (method, path, code, body[:200]))
+    return json.loads(body)
+
+
 def encode_multipart(fields, files):
     boundary = "----postdesk%d" % os.getpid()
     body = b""
@@ -206,9 +224,7 @@ def main():
     print("items=%d media_uploaded=%d dry_run=%s" % (len(items), up_count, args.dry_run))
     if args.dry_run:
         return
-    r = api(base + "/api/sync", secret, "POST",
-            json.dumps({"items": items}).encode(),
-            {"content-type": "application/json"})
+    r = curl_json(base, secret, "POST", "/api/sync", {"items": items})
     print("sync ->", r)
     state["uploaded"] = uploaded
     json.dump(state, open(state_path, "w"), indent=1)
