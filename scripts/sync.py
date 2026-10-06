@@ -34,6 +34,38 @@ STATE_FILE = "postdesk_sync.json"
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
 
+def upload_media(base, secret, key, local_path):
+    """Upload one file via curl (urllib's TLS stack gets killed by the
+    egress proxy on larger bodies; curl is reliable here)."""
+    import subprocess
+    import time
+    last = None
+    for attempt in range(3):
+        p = subprocess.run(
+            ["curl", "-s", "-w", "\n%{http_code}", "--max-time", "600",
+             "-X", "POST", base + "/api/media",
+             "-H", "x-sync-secret: " + secret,
+             "-F", "key=" + key,
+             "-F", "file=@" + local_path + ";type=" + guess_ct(local_path)],
+            capture_output=True, text=True)
+        out = p.stdout.strip().rsplit("\n", 1)
+        code = out[-1] if out else ""
+        body = out[0] if len(out) > 1 else ""
+        if code == "200":
+            try:
+                r = json.loads(body)
+                if r.get("ok"):
+                    return r
+                last = RuntimeError("upload rejected: %s" % body[:200])
+            except Exception as e:
+                last = e
+        else:
+            last = RuntimeError("curl upload %s -> HTTP %s: %s" % (local_path, code, (p.stderr or body)[:200]))
+        print("upload attempt %d/3 failed: %s" % (attempt + 1, last))
+        time.sleep(2 * (attempt + 1))
+    raise last
+
+
 def encode_multipart(fields, files):
     boundary = "----postdesk%d" % os.getpid()
     body = b""
@@ -50,17 +82,25 @@ def encode_multipart(fields, files):
     return body, "multipart/form-data; boundary=" + boundary
 
 
-def api(url, secret, method="GET", data=None, headers=None):
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("x-sync-secret", secret)
-    for k, v in (headers or {}).items():
-        req.add_header(k, v)
-    try:
-        with urllib.request.urlopen(req, timeout=300) as r:
-            return json.loads(r.read().decode())
-    except urllib.error.HTTPError as e:
-        print("HTTP %d on %s: %s" % (e.code, url, e.read()[:300]), file=sys.stderr)
-        raise
+def api(url, secret, method="GET", data=None, headers=None, retries=4):
+    last = None
+    for attempt in range(retries):
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("x-sync-secret", secret)
+        for k, v in (headers or {}).items():
+            req.add_header(k, v)
+        try:
+            with urllib.request.urlopen(req, timeout=300) as r:
+                return json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            print("HTTP %d on %s: %s" % (e.code, url, e.read()[:300]), file=sys.stderr)
+            raise
+        except Exception as e:
+            last = e
+            print("attempt %d/%d failed (%s): %s" % (attempt + 1, retries, url, e))
+            import time
+            time.sleep(2 * (attempt + 1))
+    raise last
 
 
 def guess_ct(name):
@@ -132,17 +172,12 @@ def main():
                             print("skip too big: %s (%d)" % (lp, size))
                             continue
                         print("upload %s (%d KB) -> %s" % (lp, size // 1024, key))
-                        with open(lp, "rb") as f:
-                            data = f.read()
-                        body, ct = encode_multipart(
-                            {"key": key},
-                            {"file": (os.path.basename(lp), guess_ct(lp), data)})
-                        r = api(base + "/api/media", secret, "POST", body,
-                                {"content-type": ct})
-                        if not r.get("ok"):
-                            print("upload failed for %s" % lp, file=sys.stderr)
-                            continue
+                        r = upload_media(base, secret, key, lp)
                         up_count += 1
+                        if up_count % 10 == 0:
+                            state["uploaded"] = uploaded
+                            json.dump(state, open(state_path, "w"), indent=1)
+                            print("checkpoint: %d uploaded" % up_count)
                     uploaded[lp] = key
                 media.append({"kind": kind, "key": uploaded[lp]})
             items.append({
