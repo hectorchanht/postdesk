@@ -54,6 +54,8 @@ export default {
     if (path === '/api/me' && req.method === 'GET') return json({ ok: true });
     const m = path.match(/^\/api\/items\/([^/]+)\/status$/);
     if (m && req.method === 'POST') return handleStatus(req, env, decodeURIComponent(m[1]));
+    const dm = path.match(/^\/api\/items\/([^/]+)$/);
+    if (dm && req.method === 'DELETE') return handleDelete(env, decodeURIComponent(dm[1]));
 
     if (path === '/' && req.method === 'GET') return dashboardPage();
     return new Response('not found', { status: 404 });
@@ -171,6 +173,14 @@ async function handleStatus(req, env, id) {
   }
   await env.POSTDESK_KV.put('items', JSON.stringify(store));
   return json({ ok: true, item: it });
+}
+
+async function handleDelete(env, id) {
+  const store = (await env.POSTDESK_KV.get('items', 'json')) || {};
+  if (!store[id]) return json({ error: 'not found' }, 404);
+  delete store[id];
+  await env.POSTDESK_KV.put('items', JSON.stringify(store));
+  return json({ ok: true, deleted: id });
 }
 
 // ---------- pages ----------
